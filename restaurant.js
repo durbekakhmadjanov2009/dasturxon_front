@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://dasturxon-bgbot-production.up.railway.app'; // API manzili, kerak bo'lsa o'zgartiring
+const API_BASE_URL = 'http://localhost:8080'; // API manzili, kerak bo'lsa o'zgartiring
 
 /* ================= URL PARAMS ================= */
 
@@ -10,7 +10,7 @@ if (!shopId) {
     window.location.href = 'index.html';
 }
 
-// shopId ni saqlab qo‘yamiz (cart uchun kerak bo‘ladi)
+// shopId ni saqlab qo'yamiz (cart uchun kerak bo'ladi)
 localStorage.setItem("shopId", shopId);
 sessionStorage.setItem("shopId", shopId);
 
@@ -52,9 +52,12 @@ async function fetchProducts() {
             : '';
     }
 
+    // FAQAT ACTIVE MAHSULOTLARNI FILTRLASH
+    const activeProducts = products.filter(p => p.isActive === true || p.is_active === true);
+
     const categorized = {};
 
-    products.forEach(p => {
+    activeProducts.forEach(p => {
         const cat = p.category?.name || "Boshqa";
         if (!categorized[cat]) categorized[cat] = [];
         categorized[cat].push(p);
@@ -153,7 +156,7 @@ let currentProductId = null;
 async function openProductDetail(productId) {
 
     currentProductId = productId;
-        banner.style.display = 'none'; // 👈 SHU QATOR
+    banner.style.display = 'none'; // 👈 SHU QATOR
 
 
     const res = await fetch(`${API_BASE_URL}/user/shops/${shopId}/products/${productId}`);
@@ -263,6 +266,3 @@ function setupScrollObserver() {
 /* ================= START ================= */
 
 fetchProducts();
-
-
-

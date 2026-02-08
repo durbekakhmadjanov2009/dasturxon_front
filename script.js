@@ -1,7 +1,7 @@
 // API base URL
-const API_BASE_URL = 'https://dasturxon-bgbot-production.up.railway.app';
+const API_BASE_URL = 'http://localhost:8080'; // --- IGNORE ---
 
-// FAQAT BRAUZERDA FAOL BO’LSIN
+// FAQAT BRAUZERDA FAOL BO'LSIN
 if (typeof document !== 'undefined') {
 
     // Modal elementlar
@@ -22,7 +22,7 @@ if (typeof document !== 'undefined') {
     let currentPhoneNumber = null;
 
     // TELEGRAM CHAT ID olish (Telegram Web App API)
-const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
+    const chatId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || null;
 
     // FORMAT PHONE INPUT
     function formatPhoneInput(input) {
@@ -43,6 +43,8 @@ const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
         }
 
         const savedPhoneNumber = localStorage.getItem('userPhone');
+        const savedChatId = localStorage.getItem('userChatId');
+        
         if (savedPhoneNumber) {
             currentPhoneNumber = savedPhoneNumber;
             try {
@@ -51,10 +53,10 @@ const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
                 const data = await res.json();
                 if (!data.isNewContact) {
                     showExistingPhoneForm();
-                    await updateLastLogin(savedPhoneNumber);
+                    await updateLastLogin(savedPhoneNumber, savedChatId);
                     return;
                 }
-            } catch { /* backend yo‘q */ }
+            } catch { /* backend yo'q */ }
         }
         showNewPhoneForm();
     }
@@ -86,34 +88,64 @@ const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
     }
 
     // SAVE PHONE + CHAT ID
-   async function savePhoneNumber(phone) {
-    const res = await fetch(`${API_BASE_URL}/api/contacts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber: phone })
-    });
+    async function savePhoneNumber(phone) {
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/contacts`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    phoneNumber: phone,
+                    chatId: chatId // chat ID ni serverga yuboramiz
+                })
+            });
 
-    const data = await res.json();
-    // serverdan chatId qaytariladi
-    const chatId = data.chatId;
-}
+            if (!res.ok) throw new Error('Saqlashda xatolik');
+            
+            const data = await res.json();
+            
+            // localStorage ga saqlaymiz
+            localStorage.setItem('userPhone', phone);
+            if (chatId) {
+                localStorage.setItem('userChatId', chatId);
+            }
+            
+            currentPhoneNumber = phone;
+            sessionStorage.setItem('userPhone', phone);
+            sessionStorage.setItem('phoneModalShown', 'true');
+            
+            phoneModal.classList.remove('active');
+            fetchRestaurants();
+            
+        } catch (err) {
+            console.error('Telefon raqam saqlashda xatolik:', err);
+            alert('Xatolik yuz berdi. Qaytadan urinib ko\'ring.');
+        }
+    }
 
     // UPDATE LAST LOGIN
-    async function updateLastLogin(phone) {
+    async function updateLastLogin(phone, chatId) {
         try {
-            await fetch(`${API_BASE_URL}/api/contacts/login?phone=${encodeURIComponent(phone)}`, { method: 'POST' });
+            const params = new URLSearchParams({ phone });
+            if (chatId) params.append('chatId', chatId);
+            
+            await fetch(`${API_BASE_URL}/api/contacts/login?${params.toString()}`, { 
+                method: 'POST' 
+            });
         } catch {}
     }
 
     // BUTTONS
     continueBtn?.addEventListener('click', async () => {
-        if (phoneInput.value.length === 9) await savePhoneNumber('+998' + phoneInput.value);
+        if (phoneInput.value.length === 9) {
+            await savePhoneNumber('+998' + phoneInput.value);
+        }
     });
 
     confirmBtn?.addEventListener('click', async () => {
+        const savedChatId = localStorage.getItem('userChatId');
         sessionStorage.setItem('userPhone', currentPhoneNumber);
         sessionStorage.setItem('phoneModalShown', 'true');
-        await updateLastLogin(currentPhoneNumber);
+        await updateLastLogin(currentPhoneNumber, savedChatId);
         phoneModal.classList.remove('active');
         fetchRestaurants();
     });
@@ -148,9 +180,14 @@ const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
 
             shops.forEach(shop => {
                 const card = document.createElement('div');
-                card.className = 'restaurant-card';
+                const isInactive = shop.active === false || shop.isActive === false;
+                
+                card.className = `restaurant-card ${isInactive ? 'restaurant-inactive' : ''}`;
                 card.innerHTML = `
-                    <img src="${shop.image || 'img/Glamour.png'}" alt="${shop.name}" class="restaurant-image" onerror="this.src='img/Glamour.png';">
+                    <div class="restaurant-image-wrapper">
+                        <img src="${shop.image || 'img/Glamour.png'}" alt="${shop.name}" class="restaurant-image" onerror="this.src='img/Glamour.png';">
+                        ${isInactive ? '<div class="closed-badge">Yopildi</div>' : ''}
+                    </div>
                     <div class="restaurant-info">
                         <h3>${shop.name || 'No name'}</h3>
                         <p class="restaurant-tags">${shop.description || 'Milliy taomlar, fastfood'}</p>
@@ -164,7 +201,11 @@ const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
                         ${shop.hasPromo ? '<p class="promo-text">10% chegirma</p>' : ''}
                     </div>
                 `;
-                card.addEventListener('click', () => window.location.href = `restaurant.html?id=${shop.id}`);
+                
+                if (!isInactive) {
+                    card.addEventListener('click', () => window.location.href = `restaurant.html?id=${shop.id}`);
+                }
+                
                 container.appendChild(card);
             });
         } catch (err) {
@@ -187,6 +228,7 @@ const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
     document.getElementById('logoutBtn')?.addEventListener('click', () => {
         sessionStorage.clear();
         localStorage.removeItem('userPhone');
+        localStorage.removeItem('userChatId');
         window.location.href = 'index.html';
     });
 

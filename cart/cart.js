@@ -1,4 +1,4 @@
-const API_BASE_URL = "https://dasturxon-bgbot-production.up.railway.app";
+const API_BASE_URL = "http://localhost:8080"; // --- IGNORE ---
 const cartContainer = document.getElementById("cartContainer");
 const loadingDiv = document.getElementById("loadingCart");
 

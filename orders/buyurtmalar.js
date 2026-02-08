@@ -1,10 +1,260 @@
-const API_BASE_URL = "https://dasturxon-bgbot-production.up.railway.app";
+const API_BASE_URL = "http://localhost:8080"; // --- IGNORE ---
 const ordersContainer = document.getElementById("ordersContainer");
 const loadingOrders = document.getElementById("loadingOrders");
 
 // Cache uchun
 let shopsCache = null;
 let loadingShopsPromise = null;
+
+// Real-time tracking uchun
+let statusCheckInterval = null;
+let previousOrderStatuses = {}; // orderId -> status mapping
+let notificationSound = null;
+
+/**
+ * Notification ovozini yaratish
+ */
+function initNotificationSound() {
+    if (!notificationSound) {
+        // Web Audio API orqali oddiy notification ovozi
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        notificationSound = () => {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            // Yoqimli notification ovozi (2 ta beep)
+            oscillator.frequency.value = 800;
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.1);
+            
+            // Ikkinchi beep
+            setTimeout(() => {
+                const oscillator2 = audioContext.createOscillator();
+                const gainNode2 = audioContext.createGain();
+                
+                oscillator2.connect(gainNode2);
+                gainNode2.connect(audioContext.destination);
+                
+                oscillator2.frequency.value = 1000;
+                oscillator2.type = 'sine';
+                
+                gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+                
+                oscillator2.start(audioContext.currentTime);
+                oscillator2.stop(audioContext.currentTime + 0.1);
+            }, 150);
+        };
+    }
+}
+
+/**
+ * Browser notification ko'rsatish
+ */
+function showBrowserNotification(orderId, oldStatus, newStatus) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+        const notification = new Notification('Buyurtma holati o\'zgardi! 🎉', {
+            body: `Buyurtma #${orderId}: ${translateStatus(oldStatus)} → ${translateStatus(newStatus)}`,
+            icon: '/img/logo.png', // Logo rasmingiz bo'lsa
+            badge: '/img/badge.png',
+            vibrate: [200, 100, 200]
+        });
+        
+        notification.onclick = () => {
+            window.focus();
+            notification.close();
+        };
+    }
+}
+
+/**
+ * Status o'zgarishini tekshirish va notification
+ */
+function checkStatusChange(orderId, newStatus) {
+    const oldStatus = previousOrderStatuses[orderId];
+    
+    if (oldStatus && oldStatus !== newStatus) {
+        console.log(`🔔 Status changed for order #${orderId}: ${oldStatus} → ${newStatus}`);
+        
+        // Ovoz chiqarish
+        if (notificationSound) {
+            notificationSound();
+        }
+        
+        // Browser notification
+        showBrowserNotification(orderId, oldStatus, newStatus);
+        
+        // Visual notification (optional - screen tepasida)
+        showVisualNotification(orderId, oldStatus, newStatus);
+        
+        // Buyurtmalarni qayta yuklash (yangi status bilan)
+        loadOrders();
+    }
+    
+    // Yangi statusni saqlash
+    previousOrderStatuses[orderId] = newStatus;
+}
+
+/**
+ * Visual notification (screen tepasida)
+ */
+function showVisualNotification(orderId, oldStatus, newStatus) {
+    // Status bo'yicha xabar va emoji
+    const statusMessages = {
+        'ACCEPTED': {
+            title: '✅ Buyurtma qabul qilindi!',
+            message: 'Hurmatli mijoz, sizning buyurtmangiz muvaffaqiyatli qabul qilindi. Restoran buyurtmangizni tayyorlashni boshladi.',
+            color: '#10b981'
+        },
+        'PREPARING': {
+            title: '👨‍🍳 Tayyorlanmoqda!',
+            message: 'Buyurtmangiz tayyorlanmoqda. Oshpazlarimiz eng mazali taomlarni tayyorlashmoqda.',
+            color: '#f59e0b'
+        },
+        'READY': {
+            title: '🎉 Buyurtma tayyor!',
+            message: 'Buyurtmangiz tayyor bo\'ldi va tez orada yo\'lga chiqadi. Kuryer sizning manzilingizga yo\'l olmoqda.',
+            color: '#8b5cf6'
+        },
+        'DELIVERING': {
+            title: '🚗 Yo\'lda!',
+            message: 'Buyurtmangiz yo\'lga chiqdi! Kuryer sizning manzilingizga kelmoqda. Iltimos, telefon yoningizda bo\'sin.',
+            color: '#3b82f6'
+        },
+        'DELIVERED': {
+            title: '🎊 Yetkazildi!',
+            message: 'Buyurtmangiz muvaffaqiyatli yetkazildi. Ishtahangiz ochsin! Bizni tanlaganingiz uchun rahmat.',
+            color: '#059669'
+        }
+    };
+
+    const statusInfo = statusMessages[newStatus] || {
+        title: '📦 Holat yangilandi',
+        message: `Buyurtma #${orderId} holati ${translateStatus(oldStatus)} dan ${translateStatus(newStatus)} ga o'zgartirildi.`,
+        color: '#6366f1'
+    };
+
+    const notification = document.createElement('div');
+    notification.className = 'status-notification';
+    notification.innerHTML = `
+        <div class="notification-content">
+            <div class="notification-left">
+                <div class="notification-icon-circle" style="background: ${statusInfo.color};">
+                    <span class="notification-emoji">${statusInfo.title.match(/[\u{1F300}-\u{1F9FF}]/u)?.[0] || '📦'}</span>
+                </div>
+            </div>
+            <div class="notification-right">
+                <div class="notification-header">
+                    <div class="notification-title">${statusInfo.title.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()}</div>
+                    <div class="notification-order-id">Buyurtma #${orderId}</div>
+                </div>
+                <div class="notification-message">${statusInfo.message}</div>
+                <div class="notification-progress">
+                    <div class="notification-progress-bar" style="background: ${statusInfo.color};"></div>
+                </div>
+            </div>
+            <button class="notification-close" onclick="this.closest('.status-notification').classList.remove('show'); setTimeout(() => this.closest('.status-notification').remove(), 300)">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Animation
+    setTimeout(() => notification.classList.add('show'), 100);
+    
+    // Progress bar animation
+    const progressBar = notification.querySelector('.notification-progress-bar');
+    setTimeout(() => {
+        progressBar.style.width = '100%';
+    }, 200);
+    
+    // 8 sekunddan keyin o'chirish
+    setTimeout(() => {
+        notification.classList.remove('show');
+        setTimeout(() => notification.remove(), 300);
+    }, 8000);
+}
+
+/**
+ * Buyurtmalarni background da tekshirish (faqat active buyurtmalar)
+ */
+async function checkOrderStatusUpdates() {
+    const phone = getUserPhone();
+    if (!phone) return;
+    
+    try {
+        const encodedPhone = encodeURIComponent(phone);
+        const response = await fetch(
+            `${API_BASE_URL}/api/orders/by-phone?phoneNumber=${encodedPhone}`
+        );
+        
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        if (!data || data.length === 0) return;
+        
+        // Faqat active buyurtmalarni tekshirish (DELIVERED va CANCELLED emas)
+        const activeOrders = data.filter(orderData => {
+            const status = orderData.order.status;
+            return status !== 'DELIVERED' && status !== 'CANCELLED';
+        });
+        
+        activeOrders.forEach(orderData => {
+            const order = orderData.order;
+            checkStatusChange(order.id, order.status);
+        });
+        
+    } catch (error) {
+        console.warn('Status tekshirishda xatolik:', error);
+    }
+}
+
+/**
+ * Real-time tracking ni boshlash
+ */
+function startStatusTracking() {
+    // Avvalgi interval ni to'xtatish
+    if (statusCheckInterval) {
+        clearInterval(statusCheckInterval);
+    }
+    
+    // Notification ovozini init qilish
+    initNotificationSound();
+    
+    // Browser notification ruxsatini so'rash
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+    
+    // Har 10 sekundda tekshirish (production da 15-30 sekund qilish mumkin)
+    statusCheckInterval = setInterval(checkOrderStatusUpdates, 10000);
+    
+    console.log('✅ Status tracking started (checking every 10 seconds)');
+}
+
+/**
+ * Tracking ni to'xtatish
+ */
+function stopStatusTracking() {
+    if (statusCheckInterval) {
+        clearInterval(statusCheckInterval);
+        statusCheckInterval = null;
+        console.log('🛑 Status tracking stopped');
+    }
+}
 
 /**
  * Telefon raqamni olish
@@ -230,13 +480,11 @@ function renderOrderCard(orderData) {
         `;
     }
 
-    // 🔥 Yetkazib berish narxini to'g'ri olish (backenddan kelgan qiymat)
     const deliveryFee = order.deliveryFee || 0;
     const deliveryText = deliveryFee > 0 
         ? `🚚 Yetkazish: ${deliveryFee.toLocaleString()} so'm` 
         : '🚚 Bepul yetkazish';
 
-    // 🔥 totalAmount yoki totalPrice dan to'g'ri qiymatni olish
     const totalPrice = order.totalAmount || order.totalPrice || 0;
 
     card.innerHTML = `
@@ -316,7 +564,6 @@ function showOrderDetail(orderData) {
     const order = orderData.order;
     const items = orderData.items || [];
 
-    // Modal yaratish
     const modal = document.createElement('div');
     modal.className = 'order-modal active';
     modal.onclick = (e) => {
@@ -357,7 +604,6 @@ function showOrderDetail(orderData) {
         }).join('');
     }
 
-    // 🔥 To'lovlar to'g'ri hisoblash
     const subtotal = items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
     const deliveryFee = order.deliveryFee || 0;
     const total = order.totalAmount || order.totalPrice || (subtotal + deliveryFee);
@@ -445,118 +691,68 @@ function showOrderDetail(orderData) {
 }
 
 /**
- * Buyurtma ma'lumotlarini to'ldirish (shop va product info)
+ * Buyurtma ma'lumotlarini to'ldirish
  */
 async function enrichOrderData(orderData) {
     const order = orderData.order;
     const items = orderData.items || [];
 
-    console.log('🔍 Enriching order #' + order.id);
-    console.log('📦 Full order data:', JSON.stringify(orderData, null, 2));
-
     try {
-        // 🔥 Yetkazib berish narxini backenddan olingan qiymatdan olish
-        // Agar order.deliveryFee mavjud bo'lsa, uni ishlatamiz (shop.deliveryPrice ni emas!)
         if (order.deliveryFee === undefined || order.deliveryFee === null) {
             order.deliveryFee = 0;
         }
-        console.log('💰 Delivery fee from backend:', order.deliveryFee);
         
-        // ShopId turli joylarda bo'lishi mumkin
         const shopId = order.shopId || order.shop_id || order.shop?.id;
         
         if (shopId) {
-            console.log('🏪 Getting shop info for shopId:', shopId);
             const shop = await getShopById(shopId);
             if (shop) {
                 order.shopName = shop.name;
                 order.shopImage = shop.image;
-                order.shopId = shopId; // Ensure shopId is set
-                console.log('✅ Shop found:', shop.name);
-            } else {
-                console.warn('⚠️ Shop not found for ID:', shopId);
+                order.shopId = shopId;
             }
-        } else {
-            console.warn('⚠️ No shopId found in order');
         }
 
-        // Har bir mahsulot uchun to'liq ma'lumot olish
         const enrichedItems = await Promise.all(
-            items.map(async (item, index) => {
-                console.log(`🍔 Processing item ${index + 1}:`, item);
-                
-                // Avval item.product obyektidan ma'lumotlarni olishga harakat qilamiz
+            items.map(async (item) => {
                 if (item.product) {
-                    console.log('  ✨ Found product object in item:', item.product);
                     item.productName = item.product.name || item.productName || 'Mahsulot';
-                    
-                    // Rasm uchun turli field nomlarni tekshiramiz
-                    item.productImage = item.product.imageUrl || 
-                                       item.product.image || 
-                                       item.product.img || 
-                                       item.product.photo || 
-                                       item.productImage;
-                    
+                    item.productImage = item.product.imageUrl || item.product.image || item.productImage;
                     if (!item.price && item.product.price) {
                         item.price = item.product.price;
                     }
-                    console.log(`  ✅ Used product object:`);
-                    console.log(`     - Name: ${item.productName}`);
-                    console.log(`     - Image URL: ${item.productImage || 'NO IMAGE FOUND'}`);
-                    console.log(`     - Price: ${item.price}`);
-                    console.log(`     - Available fields in product:`, Object.keys(item.product));
                     return item;
                 }
                 
-                // ProductId ni turli nomlar bilan tekshiramiz
                 const productId = item.productId || item.product_id || item.id;
                 
-                console.log(`  - Product ID: ${productId}`);
-                console.log(`  - Current name: ${item.productName}`);
-                console.log(`  - Current image: ${item.productImage}`);
-                console.log(`  - ShopId available: ${shopId}`);
-                
-                // Agar mahsulot ma'lumoti to'liq bo'lmasa va API dan olish kerak bo'lsa
                 if ((!item.productName || !item.productImage) && productId && shopId) {
                     try {
-                        console.log(`  - Fetching product info: shopId=${shopId}, productId=${productId}`);
                         const product = await getProductInfo(shopId, productId);
-                        
                         if (product) {
-                            console.log('  ✅ Product found from API:', product);
                             item.productName = product.name || item.productName || 'Mahsulot';
                             item.productImage = product.imageUrl || item.productImage;
                             if (!item.price && product.price) {
                                 item.price = product.price;
                             }
-                            console.log(`  ✅ Updated from API: ${item.productName} - ${item.productImage ? 'Has image' : 'No image'}`);
-                        } else {
-                            console.warn('  ⚠️ Product not found from API');
-                            item.productName = item.productName || 'Mahsulot';
                         }
                     } catch (error) {
-                        console.error('  ❌ Error fetching product from API:', error);
                         item.productName = item.productName || 'Mahsulot';
                     }
                 } else {
-                    if (!productId) console.warn(`  ⚠️ Missing productId`);
-                    if (!shopId) console.warn(`  ⚠️ Missing shopId`);
                     item.productName = item.productName || 'Mahsulot';
                 }
                 
                 return item;
             })
         );
-
-        console.log('✅ Enrichment completed for order #' + order.id);
-        console.log('📊 Final enriched data:', { order, items: enrichedItems });
         
         return {
             order: order,
             items: enrichedItems
         };
     } catch (error) {
-        console.error('❌ Buyurtma ma\'lumotlarini enrichment qilishda xatolik:', error);
+        console.error('Buyurtma ma\'lumotlarini enrichment qilishda xatolik:', error);
         return orderData;
     }
 }
@@ -576,30 +772,15 @@ async function loadOrders() {
     ordersContainer.innerHTML = '';
 
     try {
-        console.log('📱 Loading orders for phone:', phone);
-        
-        // Avval do'konlarni yuklaymiz (cache uchun)
-        console.log('🏪 Loading shops cache...');
         await loadShops();
-        console.log('✅ Shops cache loaded');
 
-        // Buyurtmalarni yuklaymiz
-        // encodeURIComponent telefon raqamni to'g'ri encode qiladi
         const encodedPhone = encodeURIComponent(phone);
-        console.log('📞 Encoded phone:', encodedPhone);
-        
         const response = await fetch(
             `${API_BASE_URL}/api/orders/by-phone?phoneNumber=${encodedPhone}`
         );
 
         if (!response.ok) {
-            // Response body ni o'qib ko'ramiz
-            const errorText = await response.text().catch(() => 'No error details');
-            console.warn('⚠️ Server response:', response.status, errorText);
-            
-            // 404 yoki 400 - buyurtmalar yo'q
             if (response.status === 404 || response.status === 400) {
-                console.log('ℹ️ No orders found for this user (status: ' + response.status + ')');
                 loadingOrders.classList.remove('active');
                 showEmptyOrders();
                 return;
@@ -608,41 +789,35 @@ async function loadOrders() {
         }
 
         const data = await response.json();
-        console.log('📦 Raw orders data:', data);
 
-        // Data null, undefined yoki bo'sh massiv bo'lishi mumkin
         if (!data || (Array.isArray(data) && data.length === 0)) {
-            console.log('ℹ️ No orders in response data');
             loadingOrders.classList.remove('active');
             showEmptyOrders();
             return;
         }
 
-        console.log(`🔄 Enriching ${data.length} orders...`);
-        
-        // Har bir buyurtma uchun to'liq ma'lumot olish
         const enrichedOrders = await Promise.all(
             data.map(orderData => enrichOrderData(orderData))
         );
 
-        console.log('✅ All orders enriched:', enrichedOrders);
+        // Previous statuses ni yangilash (tracking uchun)
+        enrichedOrders.forEach(orderData => {
+            const orderId = orderData.order.id;
+            const status = orderData.order.status;
+            if (!previousOrderStatuses[orderId]) {
+                previousOrderStatuses[orderId] = status;
+            }
+        });
 
         loadingOrders.classList.remove('active');
 
-        // Buyurtmalarni sanaga qarab guruhlash
         const groupedOrders = groupOrdersByDate(enrichedOrders);
-
-        // Sanalarni teskari tartibda saralash (eng yangi birinchi)
         const sortedDates = Object.keys(groupedOrders).sort((a, b) => new Date(b) - new Date(a));
 
-        // Har bir sana uchun buyurtmalarni render qilish
         sortedDates.forEach(dateKey => {
             const orders = groupedOrders[dateKey];
-
-            // Buyurtmalarni teskari tartibda saralash (eng oxirgi birinchi)
             orders.sort((a, b) => new Date(b.order.createdAt) - new Date(a.order.createdAt));
 
-            // Sana guruhi
             const dateGroup = document.createElement('div');
             dateGroup.className = 'date-group';
 
@@ -651,7 +826,6 @@ async function loadOrders() {
             dateHeader.textContent = formatDate(orders[0].order.createdAt);
             dateGroup.appendChild(dateHeader);
 
-            // Har bir buyurtma kartasi
             orders.forEach(orderData => {
                 const card = renderOrderCard(orderData);
                 dateGroup.appendChild(card);
@@ -660,15 +834,10 @@ async function loadOrders() {
             ordersContainer.appendChild(dateGroup);
         });
 
-        console.log('🎉 Orders rendered successfully!');
-
     } catch (error) {
-        console.error('❌ Buyurtmalarni yuklashda xatolik:');
-        console.error('   Error message:', error.message);
-        console.error('   Error stack:', error.stack);
+        console.error('Buyurtmalarni yuklashda xatolik:', error);
         loadingOrders.classList.remove('active');
         
-        // Agar network error bo'lsa
         if (error.message.includes('Failed to fetch')) {
             showError('Internetga ulanishda muammo. Iltimos, internet ulanishingizni tekshiring.');
         } else {
@@ -677,7 +846,25 @@ async function loadOrders() {
     }
 }
 
-// Sahifa yuklanganda
+// Sahifa yuklanganda va sahifa ko'rinib turganda
 document.addEventListener('DOMContentLoaded', () => {
     loadOrders();
+    startStatusTracking();
+});
+
+// Sahifa yopilganda tracking to'xtatish
+window.addEventListener('beforeunload', () => {
+    stopStatusTracking();
+});
+
+// Sahifa visibility o'zgarganda (background/foreground)
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        // Sahifa background ga ketdi - tracking ni to'xtatmaymiz, davom ettiraveramiz
+        console.log('📱 Page hidden, tracking continues');
+    } else {
+        // Sahifa foreground ga qaytdi - yangi ma'lumotlarni yuklash
+        console.log('📱 Page visible, reloading orders');
+        loadOrders();
+    }
 });

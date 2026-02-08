@@ -22,7 +22,7 @@ if (typeof document !== 'undefined') {
     let currentPhoneNumber = null;
 
     // TELEGRAM CHAT ID olish (Telegram Web App API)
-    const chatId = window.Telegram?.WebApp?.initData?.user?.id || null;
+const chatId = window.Telegram.WebApp.initDataUnsafe?.user?.id || null;
 
     // FORMAT PHONE INPUT
     function formatPhoneInput(input) {
@@ -86,26 +86,17 @@ if (typeof document !== 'undefined') {
     }
 
     // SAVE PHONE + CHAT ID
-    async function savePhoneNumber(phone) {
-        try {
-            const body = { phoneNumber: phone, firstName: null, lastName: null, chatId };
-            const res = await fetch(`${API_BASE_URL}/api/contacts`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
+   async function savePhoneNumber(phone) {
+    const res = await fetch(`${API_BASE_URL}/api/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: phone })
+    });
 
-            if (!res.ok) return alert(`Xatolik yuz berdi (${res.status})`);
-            localStorage.setItem('userPhone', phone);
-            sessionStorage.setItem('userPhone', phone);
-            sessionStorage.setItem('phoneModalShown', 'true');
-            currentPhoneNumber = phone;
-            phoneModal.classList.remove('active');
-            fetchRestaurants();
-        } catch (err) {
-            alert(`Tarmoq xatosi: ${err.message}`);
-        }
-    }
+    const data = await res.json();
+    // serverdan chatId qaytariladi
+    const chatId = data.chatId;
+}
 
     // UPDATE LAST LOGIN
     async function updateLastLogin(phone) {

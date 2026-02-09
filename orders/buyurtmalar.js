@@ -1,4 +1,4 @@
-const API_BASE_URL = "http://localhost:8080"; // --- IGNORE ---
+const API_BASE_URL = "https://daturxonbg-production.up.railway.app"; // --- IGNORE ---
 const ordersContainer = document.getElementById("ordersContainer");
 const loadingOrders = document.getElementById("loadingOrders");
 

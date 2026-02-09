@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:8080'; // API manzili, kerak bo'lsa o'zgartiring
+const API_BASE_URL = 'https://daturxonbg-production.up.railway.app'; // API manzili, kerak bo'lsa o'zgartiring
 
 /* ================= URL PARAMS ================= */
 
